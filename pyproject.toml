@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "rvclib"
-version = "0.1.0"
+version = "0.1.1"
 description = "library to use rvc"
 authors = ["Emmanuel Schmidbauer <eschmidbauer@gmail.com>"]
 readme = "README.md"

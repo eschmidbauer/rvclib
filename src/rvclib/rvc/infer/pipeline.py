@@ -707,3 +707,142 @@ class Pipeline:
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         return audio_opt
+
+    def stream_pipeline(
+        self,
+        model,
+        net_g,
+        sid,
+        input_stream,
+        pitch_init=None,
+        f0_method="crepe",
+        index_file="",
+        index_rate=0,
+        pitch_guidance=False,
+        filter_radius=0,
+        volume_envelope=1,
+        version="v1",
+        protect=0.5,
+        hop_length=160,
+        f0_autotune=False,
+        f0_autotune_strength=0.0,
+        chunk_size=80000,  # e.g. 5 seconds at 16kHz
+        input_sr=24000,
+    ):
+        """
+        Processes streamed audio input and yields converted audio chunks.
+
+        Args:
+            model: The feature extraction model.
+            net_g: The generative model for synthesis.
+            sid: Speaker ID (e.g. an integer or tensor).
+            input_stream: An iterable or generator that yields audio chunks as NumPy arrays.
+            pitch_init: Initial pitch guidance (if available).
+            f0_method: F0 estimation method ("crepe", "rmvpe", "fcpe", or hybrid).
+            index_file: Path to a FAISS index file (if using speaker embeddings).
+            index_rate: Blending rate for speaker embedding retrieval.
+            pitch_guidance: Whether to use pitch guidance.
+            filter_radius: Radius for median filtering in F0 estimation.
+            volume_envelope: Factor for adjusting RMS of the output.
+            version: Model version ("v1" or "v2").
+            protect: Protection level for preserving the original pitch.
+            hop_length: Hop length for F0 estimation.
+            f0_autotune: Whether to apply autotune to the F0 contour.
+            f0_autotune_strength: Strength of F0 autotuning.
+            chunk_size: Number of samples per processing chunk (at the target sample rate).
+            input_sr: Sample rate of the incoming audio (e.g., 24000).
+
+        Yields:
+            Processed (voice-converted) audio chunks as NumPy arrays.
+        """
+        # Load FAISS index and speaker embeddings if provided.
+        if index_file != "" and os.path.exists(index_file) and index_rate > 0:
+            try:
+                index = faiss.read_index(index_file)
+                big_npy = index.reconstruct_n(0, index.ntotal)
+            except Exception as error:
+                print(f"Error reading FAISS index: {error}")
+                index = None
+                big_npy = None
+        else:
+            index = None
+            big_npy = None
+
+        buffer = np.empty(0, dtype=np.float32)
+        # Process incoming chunks from the stream.
+        for chunk in input_stream:
+            if input_sr != self.sample_rate:
+                # Resample from input_sr (e.g., 24kHz) to the target sample rate (16kHz).
+                chunk = librosa.resample(chunk, orig_sr=input_sr, target_sr=self.sample_rate)
+            # Append new data to the buffer.
+            buffer = np.concatenate((buffer, chunk))
+            # Process the buffer if it has accumulated enough samples.
+            while len(buffer) >= chunk_size:
+                # Take a chunk and apply high-pass filtering.
+                process_chunk = buffer[:chunk_size]
+                filtered_chunk = signal.filtfilt(bh, ah, process_chunk)
+                # Pad the chunk for context (using self.t_pad defined in __init__).
+                padded_chunk = np.pad(filtered_chunk, (self.t_pad, self.t_pad), mode="reflect")
+
+                # If pitch guidance is enabled, perform F0 extraction.
+                if pitch_guidance:
+                    p_len = padded_chunk.shape[0] // self.window
+                    f0_coarse, f0_bak = self.get_f0(
+                        "stream_input", padded_chunk, p_len, pitch_init, f0_method,
+                        filter_radius, hop_length, f0_autotune, f0_autotune_strength
+                    )
+                    if self.device == "mps":
+                        f0_bak = f0_bak.astype(np.float32)
+                    pitch_tensor = torch.tensor(f0_coarse, device=self.device).unsqueeze(0).long()
+                    pitchf_tensor = torch.tensor(f0_bak, device=self.device).unsqueeze(0).float()
+                else:
+                    pitch_tensor, pitchf_tensor = None, None
+
+                # Prepare the speaker ID as a tensor.
+                sid_tensor = torch.tensor(sid, device=self.device).unsqueeze(0).long()
+                # Run voice conversion on the padded chunk.
+                converted = self.voice_conversion(
+                    model, net_g, sid_tensor, padded_chunk,
+                    pitch_tensor, pitchf_tensor, index, big_npy, index_rate, version, protect
+                )
+                # Remove padding from the converted output.
+                output_chunk = converted[self.t_pad_tgt: -self.t_pad_tgt]
+                # Optionally adjust the RMS level.
+                if volume_envelope != 1:
+                    output_chunk = AudioProcessor.change_rms(
+                        filtered_chunk, self.sample_rate, output_chunk, self.sample_rate, volume_envelope
+                    )
+                # Yield the processed chunk.
+                output_chunk = librosa.resample(output_chunk, orig_sr=40000, target_sr=input_sr)
+                yield output_chunk
+                # Remove exactly the processed part from the buffer (no overlapping region).
+                buffer = buffer[chunk_size:]
+
+        # Process any remaining audio in the buffer.
+        if len(buffer) > 0:
+            filtered_chunk = signal.filtfilt(bh, ah, buffer)
+            padded_chunk = np.pad(filtered_chunk, (self.t_pad, self.t_pad), mode="reflect")
+            if pitch_guidance:
+                p_len = padded_chunk.shape[0] // self.window
+                f0_coarse, f0_bak = self.get_f0(
+                    "stream_input", padded_chunk, p_len, pitch_init, f0_method,
+                    filter_radius, hop_length, f0_autotune, f0_autotune_strength
+                )
+                if self.device == "mps":
+                    f0_bak = f0_bak.astype(np.float32)
+                pitch_tensor = torch.tensor(f0_coarse, device=self.device).unsqueeze(0).long()
+                pitchf_tensor = torch.tensor(f0_bak, device=self.device).unsqueeze(0).float()
+            else:
+                pitch_tensor, pitchf_tensor = None, None
+            sid_tensor = torch.tensor(sid, device=self.device).unsqueeze(0).long()
+            converted = self.voice_conversion(
+                model, net_g, sid_tensor, padded_chunk,
+                pitch_tensor, pitchf_tensor, index, big_npy, index_rate, version, protect
+            )
+            output_chunk = converted[self.t_pad_tgt: -self.t_pad_tgt]
+            if volume_envelope != 1:
+                output_chunk = AudioProcessor.change_rms(
+                    filtered_chunk, self.sample_rate, output_chunk, self.sample_rate, volume_envelope
+                )
+            output_chunk = librosa.resample(output_chunk, orig_sr=40000, target_sr=input_sr)
+            yield output_chunk
