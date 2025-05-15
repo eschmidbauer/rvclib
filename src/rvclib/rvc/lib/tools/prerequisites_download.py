@@ -2,8 +2,12 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 
 import requests
+from dotenv import load_dotenv
 from tqdm import tqdm
 
+load_dotenv()
+
+file_base = os.environ.get("RVC_MODEL_BASE_PATH", "models")
 url_base = "https://huggingface.co/IAHispano/Applio/resolve/main/Resources"
 
 pretraineds_v1_list = [
@@ -49,11 +53,11 @@ embedders_list = [("embedders/contentvec/", ["pytorch_model.bin", "config.json"]
 
 
 folder_mapping_list = {
-    "pretrained_v1/": "rvc/models/pretraineds/pretrained_v1/",
-    "pretrained_v2/": "rvc/models/pretraineds/pretrained_v2/",
-    "embedders/contentvec/": "rvc/models/embedders/contentvec/",
-    "predictors/": "rvc/models/predictors/",
-    "formant/": "rvc/models/formant/",
+    "pretrained_v1/": f"{file_base}/rvc/models/pretraineds/pretrained_v1/",
+    "pretrained_v2/": f"{file_base}/rvc/models/pretraineds/pretrained_v2/",
+    "embedders/contentvec/": f"{file_base}/rvc/models/embedders/contentvec/",
+    "predictors/": f"{file_base}/rvc/models/predictors/",
+    "formant/": f"{file_base}/rvc/models/formant/",
 }
 
 

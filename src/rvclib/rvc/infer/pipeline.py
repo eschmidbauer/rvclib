@@ -10,11 +10,15 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 import torchcrepe
+from dotenv import load_dotenv
 from scipy import signal
 from torch import Tensor
 
 from rvclib.rvc.lib.predictors.FCPE import FCPEF0Predictor
 from rvclib.rvc.lib.predictors.RMVPE import RMVPE0Predictor
+
+load_dotenv()
+
 
 now_dir = os.getcwd()
 sys.path.append(now_dir)
@@ -150,6 +154,7 @@ class Pipeline:
         self.f0_mel_min = 1127 * np.log(1 + self.f0_min / 700)
         self.f0_mel_max = 1127 * np.log(1 + self.f0_max / 700)
         self.device = config.device
+        self.base_path: str = os.environ.get("RVC_MODEL_BASE_PATH", "models")
         self.ref_freqs = [
             49.00,  # G1
             51.91,  # G#1 / Ab1
@@ -209,7 +214,7 @@ class Pipeline:
         self.autotune = Autotune(self.ref_freqs)
         self.note_dict = self.autotune.note_dict
         self.model_rmvpe = RMVPE0Predictor(
-            os.path.join("rvc", "models", "predictors", "rmvpe.pt"),
+            os.path.join(self.base_path, "rvc", "models", "predictors", "rmvpe.pt"),
             is_half=self.is_half,
             device=self.device,
         )
@@ -301,7 +306,7 @@ class Pipeline:
                 f0 = f0[1:]
             elif method == "fcpe":
                 self.model_fcpe = FCPEF0Predictor(
-                    os.path.join("rvc", "models", "predictors", "fcpe.pt"),
+                    os.path.join(self.base_path, "rvc", "models", "predictors", "fcpe.pt"),
                     f0_min=int(f0_min),
                     f0_max=int(f0_max),
                     dtype=torch.float32,
@@ -360,7 +365,7 @@ class Pipeline:
             f0 = self.model_rmvpe.infer_from_audio(x, thred=0.03)
         elif f0_method == "fcpe":
             self.model_fcpe = FCPEF0Predictor(
-                os.path.join("rvc", "models", "predictors", "fcpe.pt"),
+                os.path.join(self.base_path, "rvc", "models", "predictors", "fcpe.pt"),
                 f0_min=int(self.f0_min),
                 f0_max=int(self.f0_max),
                 dtype=torch.float32,

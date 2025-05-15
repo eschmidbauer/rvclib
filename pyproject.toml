@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "rvclib"
-version = "0.1.1"
+version = "0.1.2"
 description = "library to use rvc"
 authors = ["Emmanuel Schmidbauer <eschmidbauer@gmail.com>"]
 readme = "README.md"
@@ -40,6 +40,7 @@ ml_collections = "1.0.0"
 resampy = "0.4.3"
 beartype = "0.19.0"
 rotary-embedding-torch = "0.8.6"
+dotenv = "0.9.9"
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]
